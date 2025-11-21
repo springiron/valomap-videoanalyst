@@ -1,5 +1,6 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
-import { AnalysisResult, PlayerPosition } from "../types";
+import { AnalysisResult, PlayerPosition, MinimapBounds } from "../types";
 
 const genAI = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -17,7 +18,7 @@ interface RawAgentDetection {
 
 interface RawAnalysisResponse {
   mapName: string;
-  minimapLocation: {
+  minimapLocation?: {
     ymin: number;
     xmin: number;
     ymax: number;
@@ -27,21 +28,23 @@ interface RawAnalysisResponse {
   summary: string;
 }
 
-export const analyzeValorantScreenshot = async (base64Image: string): Promise<AnalysisResult> => {
+export const analyzeValorantScreenshot = async (base64Image: string, manualBounds?: MinimapBounds): Promise<AnalysisResult> => {
   const modelId = "gemini-2.5-flash";
 
-  // Improved prompt strategy:
-  // 1. Ask for absolute coordinates (0-1000) for everything.
-  // 2. Do not ask the model to calculate relative percentages (it is bad at math).
-  // 3. Use "thinking" to ensure it carefully distinguishes the minimap from the scoreboard.
+  // If manual bounds are provided, we inject them into the prompt to force the AI to focus there.
+  const boundsInstruction = manualBounds 
+    ? `CRITICAL: The user has MANUALLY identified the minimap at these exact absolute coordinates (0-1000 scale): YMIN:${manualBounds.ymin}, XMIN:${manualBounds.xmin}, YMAX:${manualBounds.ymax}, XMAX:${manualBounds.xmax}. Use THESE coordinates as the reference for the minimap. Detect agents ONLY inside this box.`
+    : `1. **Locate the Minimap**: Find the minimap UI element (usually top-left). Return its ABSOLUTE bounding box (0-1000 scale).`;
+
   const prompt = `
     Analyze this Valorant gameplay screenshot with high precision.
 
-    GOAL: accurate extraction of the minimap and player positions on it.
+    GOAL: accurate extraction of player positions on the minimap.
 
     INSTRUCTIONS:
-    1. **Locate the Minimap**: Find the minimap UI element (usually top-left, sometimes top-right). Return its ABSOLUTE bounding box (0-1000 scale).
-    2. **Detect ALL Agent Icons**: Find every agent/hero icon visible anywhere in the image (minimap, scoreboard, etc.). 
+    ${boundsInstruction}
+    
+    2. **Detect ALL Agent Icons**: Find every agent/hero icon visible inside the minimap area. 
        - Return the ABSOLUTE bounding box (0-1000 scale) for each.
        - Identify the team (Red/Enemy or Blue/Cyan/Ally).
        - Guess the agent name if possible.
@@ -63,7 +66,9 @@ export const analyzeValorantScreenshot = async (base64Image: string): Promise<An
           ymax: { type: Type.INTEGER },
           xmax: { type: Type.INTEGER },
         },
-        required: ["ymin", "xmin", "ymax", "xmax"]
+        // If manual bounds are used, the model might skip this or just echo it, so we make it optional in schema to be safe, 
+        // though we likely won't use the AI's return value for this if manual is provided.
+        required: ["ymin", "xmin", "ymax", "xmax"] 
       },
       detectedIcons: {
         type: Type.ARRAY,
@@ -88,7 +93,7 @@ export const analyzeValorantScreenshot = async (base64Image: string): Promise<An
       },
       summary: { type: Type.STRING }
     },
-    required: ["mapName", "minimapLocation", "detectedIcons", "summary"]
+    required: ["mapName", "detectedIcons", "summary"]
   };
 
   try {
@@ -113,9 +118,21 @@ export const analyzeValorantScreenshot = async (base64Image: string): Promise<An
       const rawData = JSON.parse(response.text) as RawAnalysisResponse;
       
       // --- Post-Processing Logic ---
-      // We calculate relative positions in code to avoid model hallucination/math errors.
       
-      const mapBox = rawData.minimapLocation;
+      // Determine which bounds to use.
+      // If manualBounds exists, we trust it 100%. If not, we fall back to AI detection.
+      let mapBox: MinimapBounds;
+      
+      if (manualBounds) {
+        mapBox = manualBounds;
+      } else if (rawData.minimapLocation) {
+        mapBox = rawData.minimapLocation;
+      } else {
+         // Fallback if AI fails to return location and no manual bounds
+         // Default to top-left 20%
+         mapBox = { xmin: 0, ymin: 0, xmax: 200, ymax: 200 };
+      }
+
       const mapWidth = mapBox.xmax - mapBox.xmin;
       const mapHeight = mapBox.ymax - mapBox.ymin;
 

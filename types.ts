@@ -1,3 +1,4 @@
+
 export interface PlayerPosition {
   team: string; // e.g., "Red", "Green", "Blue", "Yellow"
   agentGuess?: string;
@@ -21,6 +22,7 @@ export interface AnalysisResult {
 
 export enum AppState {
   IDLE = 'IDLE',
+  CROP = 'CROP',
   ANALYZING = 'ANALYZING',
   SUCCESS = 'SUCCESS',
   ERROR = 'ERROR'

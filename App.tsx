@@ -1,7 +1,9 @@
+
 import React, { useState, useCallback } from 'react';
-import { AppState, AnalysisResult } from './types';
+import { AppState, AnalysisResult, MinimapBounds } from './types';
 import { analyzeValorantScreenshot } from './services/geminiService';
 import AnalysisVisualizer from './components/AnalysisVisualizer';
+import MinimapSelector from './components/MinimapSelector';
 import { Upload, Loader2, AlertCircle, Zap } from 'lucide-react';
 
 const App: React.FC = () => {
@@ -20,29 +22,35 @@ const App: React.FC = () => {
         return;
       }
 
-      setState(AppState.ANALYZING);
-      setErrorMsg('');
-
       // Convert to base64 for preview and API
       const reader = new FileReader();
       reader.onloadend = async () => {
         const base64Result = reader.result as string;
         setImageSrc(base64Result);
-        
-        // Strip prefix for API
-        const base64Data = base64Result.split(',')[1];
-
-        try {
-          const result = await analyzeValorantScreenshot(base64Data);
-          setAnalysisData(result);
-          setState(AppState.SUCCESS);
-        } catch (err) {
-          console.error(err);
-          setErrorMsg("Failed to analyze the image. Please try a clearer screenshot.");
-          setState(AppState.ERROR);
-        }
+        setErrorMsg('');
+        // Move to Crop state instead of immediately analyzing
+        setState(AppState.CROP);
       };
       reader.readAsDataURL(file);
+    }
+  };
+
+  const handleConfirmCrop = async (bounds: MinimapBounds) => {
+    if (!imageSrc) return;
+
+    setState(AppState.ANALYZING);
+    
+    // Strip prefix for API
+    const base64Data = imageSrc.split(',')[1];
+
+    try {
+      const result = await analyzeValorantScreenshot(base64Data, bounds);
+      setAnalysisData(result);
+      setState(AppState.SUCCESS);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg("Failed to analyze the image. Please try a clearer screenshot.");
+      setState(AppState.ERROR);
     }
   };
 
@@ -75,7 +83,7 @@ const App: React.FC = () => {
             <span className="hover:text-[#ff4655] cursor-pointer transition-colors">HISTORY</span>
             <span className="hover:text-[#ff4655] cursor-pointer transition-colors">AGENTS</span>
             <div className="w-px h-4 bg-gray-600"></div>
-            <span className="text-[#ff4655]">V1.0</span>
+            <span className="text-[#ff4655]">V1.1</span>
           </div>
         </div>
       </header>
@@ -90,7 +98,7 @@ const App: React.FC = () => {
                 Master The <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#ff4655] to-[#ff8a95]">Minimap</span>
               </h2>
               <p className="text-gray-400 text-lg max-w-lg mx-auto">
-                Upload your Valorant screenshot. Our AI will detect the minimap, identify player positions, and strategize for you.
+                Upload your Valorant screenshot. Manually select the minimap to ensure 100% detection accuracy.
               </p>
             </div>
 
@@ -112,18 +120,15 @@ const App: React.FC = () => {
                 </div>
               </div>
             </div>
-
-            <div className="flex justify-center gap-8 opacity-50">
-               <div className="text-center">
-                  <p className="font-valo text-2xl">Top-Left</p>
-                  <p className="text-xs text-gray-500 uppercase">Minimap Support</p>
-               </div>
-               <div className="text-center">
-                  <p className="font-valo text-2xl">Top-Right</p>
-                  <p className="text-xs text-gray-500 uppercase">Minimap Support</p>
-               </div>
-            </div>
           </div>
+        )}
+
+        {state === AppState.CROP && imageSrc && (
+          <MinimapSelector 
+            imageSrc={imageSrc}
+            onConfirm={handleConfirmCrop}
+            onCancel={handleReset}
+          />
         )}
 
         {state === AppState.ANALYZING && (
@@ -135,7 +140,7 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="text-center space-y-2">
-              <h3 className="text-2xl font-valo tracking-wide">Scanning Battlefield...</h3>
+              <h3 className="text-2xl font-valo tracking-wide">Scanning Selected Zone...</h3>
               <p className="text-gray-400 font-mono text-sm">IDENTIFYING AGENTS • TRIANGULATING POSITIONS</p>
             </div>
           </div>
