@@ -27,3 +27,5 @@ export enum AppState {
   SUCCESS = 'SUCCESS',
   ERROR = 'ERROR'
 }
+
+export type ModelProvider = 'gemini' | 'openai';

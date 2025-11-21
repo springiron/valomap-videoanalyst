@@ -1,16 +1,18 @@
 
 import React, { useState, useCallback } from 'react';
-import { AppState, AnalysisResult, MinimapBounds } from './types';
+import { AppState, AnalysisResult, MinimapBounds, ModelProvider } from './types';
 import { analyzeValorantScreenshot } from './services/geminiService';
+import { analyzeWithOpenAI } from './services/openaiService';
 import AnalysisVisualizer from './components/AnalysisVisualizer';
 import MinimapSelector from './components/MinimapSelector';
-import { Upload, Loader2, AlertCircle, Zap } from 'lucide-react';
+import { Upload, Loader2, AlertCircle, Zap, BrainCircuit, Bot } from 'lucide-react';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(AppState.IDLE);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [analysisData, setAnalysisData] = useState<AnalysisResult | null>(null);
   const [errorMsg, setErrorMsg] = useState<string>('');
+  const [provider, setProvider] = useState<ModelProvider>('gemini');
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -44,12 +46,20 @@ const App: React.FC = () => {
     const base64Data = imageSrc.split(',')[1];
 
     try {
-      const result = await analyzeValorantScreenshot(base64Data, bounds);
+      let result: AnalysisResult;
+      
+      if (provider === 'openai') {
+        result = await analyzeWithOpenAI(base64Data, bounds);
+      } else {
+        result = await analyzeValorantScreenshot(base64Data, bounds);
+      }
+      
       setAnalysisData(result);
       setState(AppState.SUCCESS);
     } catch (err) {
       console.error(err);
-      setErrorMsg("Failed to analyze the image. Please try a clearer screenshot.");
+      const message = err instanceof Error ? err.message : "Unknown error occurred";
+      setErrorMsg(`Failed to analyze the image using ${provider === 'openai' ? 'ChatGPT' : 'Gemini'}. ${message}`);
       setState(AppState.ERROR);
     }
   };
@@ -73,17 +83,43 @@ const App: React.FC = () => {
       {/* Header */}
       <header className="relative z-10 border-b border-white/10 bg-[#0f1923]/90 backdrop-blur-sm sticky top-0">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={handleReset}>
             <div className="bg-[#ff4655] p-1.5 rounded-sm">
               <Zap className="w-6 h-6 text-black fill-current" />
             </div>
-            <h1 className="text-3xl font-valo tracking-widest pt-1">VALO<span className="text-[#ff4655]">MAP</span> ANALYST</h1>
+            <h1 className="text-3xl font-valo tracking-widest pt-1 hidden md:block">VALO<span className="text-[#ff4655]">MAP</span> ANALYST</h1>
+            <h1 className="text-3xl font-valo tracking-widest pt-1 md:hidden">VALO<span className="text-[#ff4655]">MAP</span></h1>
           </div>
-          <div className="hidden md:flex items-center gap-6 text-sm font-medium text-gray-400 tracking-wider">
-            <span className="hover:text-[#ff4655] cursor-pointer transition-colors">HISTORY</span>
-            <span className="hover:text-[#ff4655] cursor-pointer transition-colors">AGENTS</span>
-            <div className="w-px h-4 bg-gray-600"></div>
-            <span className="text-[#ff4655]">V1.1</span>
+          
+          <div className="flex items-center gap-4">
+            {/* Model Switcher */}
+            <div className="flex items-center bg-[#1f2937] rounded-lg p-1 border border-gray-700">
+              <button
+                onClick={() => setProvider('gemini')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider transition-all ${
+                  provider === 'gemini' 
+                    ? 'bg-[#ff4655] text-white shadow-lg' 
+                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <BrainCircuit className="w-3.5 h-3.5" />
+                Gemini
+              </button>
+              <button
+                onClick={() => setProvider('openai')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider transition-all ${
+                  provider === 'openai' 
+                    ? 'bg-[#00e5bf] text-black shadow-lg' 
+                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                }`}
+              >
+                <Bot className="w-3.5 h-3.5" />
+                ChatGPT
+              </button>
+            </div>
+            
+            <div className="hidden md:flex w-px h-4 bg-gray-600"></div>
+            <span className="hidden md:block text-[#ff4655] text-sm font-medium tracking-wider">V1.2</span>
           </div>
         </div>
       </header>
@@ -98,12 +134,12 @@ const App: React.FC = () => {
                 Master The <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#ff4655] to-[#ff8a95]">Minimap</span>
               </h2>
               <p className="text-gray-400 text-lg max-w-lg mx-auto">
-                Upload your Valorant screenshot. Manually select the minimap to ensure 100% detection accuracy.
+                Upload your Valorant screenshot. <span className="text-white">Now powering</span> with {provider === 'gemini' ? 'Google Gemini 2.5' : 'OpenAI GPT-4o'}.
               </p>
             </div>
 
             <div className="relative group">
-              <div className="absolute -inset-1 bg-gradient-to-r from-[#ff4655] to-[#00e5bf] rounded-lg blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200"></div>
+              <div className={`absolute -inset-1 bg-gradient-to-r ${provider === 'gemini' ? 'from-[#ff4655] to-[#ff8a95]' : 'from-[#00e5bf] to-[#009980]'} rounded-lg blur opacity-25 group-hover:opacity-50 transition duration-1000 group-hover:duration-200`}></div>
               <div className="relative bg-[#1f2937] border border-gray-600 hover:border-gray-500 rounded-lg p-12 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer group-hover:-translate-y-1">
                 <input 
                   type="file" 
@@ -111,14 +147,18 @@ const App: React.FC = () => {
                   onChange={handleFileChange}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
                 />
-                <div className="w-20 h-20 bg-[#0f1923] rounded-full flex items-center justify-center border border-dashed border-gray-500 group-hover:border-[#ff4655] transition-colors">
-                  <Upload className="w-8 h-8 text-gray-400 group-hover:text-[#ff4655]" />
+                <div className={`w-20 h-20 bg-[#0f1923] rounded-full flex items-center justify-center border border-dashed border-gray-500 transition-colors ${provider === 'gemini' ? 'group-hover:border-[#ff4655]' : 'group-hover:border-[#00e5bf]'}`}>
+                  <Upload className={`w-8 h-8 text-gray-400 ${provider === 'gemini' ? 'group-hover:text-[#ff4655]' : 'group-hover:text-[#00e5bf]'}`} />
                 </div>
                 <div className="space-y-1">
                   <p className="text-xl font-bold text-white">Drop your screenshot here</p>
                   <p className="text-sm text-gray-500">Supports PNG, JPG, WEBP</p>
                 </div>
               </div>
+            </div>
+            
+            <div className="text-xs text-gray-500 font-mono">
+              CURRENT ENGINE: <span className={`${provider === 'gemini' ? 'text-[#ff4655]' : 'text-[#00e5bf]'} font-bold`}>{provider.toUpperCase()}</span>
             </div>
           </div>
         )}
@@ -134,13 +174,15 @@ const App: React.FC = () => {
         {state === AppState.ANALYZING && (
           <div className="flex flex-col items-center justify-center space-y-6 animate-pulse">
             <div className="relative">
-              <div className="w-24 h-24 border-4 border-[#ff4655]/20 border-t-[#ff4655] rounded-full animate-spin"></div>
+              <div className={`w-24 h-24 border-4 border-t-transparent rounded-full animate-spin ${provider === 'gemini' ? 'border-[#ff4655]' : 'border-[#00e5bf]'}`}></div>
               <div className="absolute inset-0 flex items-center justify-center">
-                <Zap className="w-8 h-8 text-[#ff4655]" />
+                {provider === 'gemini' ? <Zap className="w-8 h-8 text-[#ff4655]" /> : <Bot className="w-8 h-8 text-[#00e5bf]" />}
               </div>
             </div>
             <div className="text-center space-y-2">
-              <h3 className="text-2xl font-valo tracking-wide">Scanning Selected Zone...</h3>
+              <h3 className="text-2xl font-valo tracking-wide">
+                {provider === 'gemini' ? 'Gemini is Thinking...' : 'ChatGPT is Thinking...'}
+              </h3>
               <p className="text-gray-400 font-mono text-sm">IDENTIFYING AGENTS • TRIANGULATING POSITIONS</p>
             </div>
           </div>
@@ -155,13 +197,13 @@ const App: React.FC = () => {
         )}
 
         {state === AppState.ERROR && (
-           <div className="bg-red-900/20 border border-red-500/50 p-8 rounded-lg text-center max-w-md">
+           <div className="bg-red-900/20 border border-red-500/50 p-8 rounded-lg text-center max-w-md animate-fade-in">
               <AlertCircle className="w-12 h-12 text-red-500 mx-auto mb-4" />
               <h3 className="text-xl font-bold text-white mb-2">Analysis Failed</h3>
-              <p className="text-gray-300 mb-6">{errorMsg}</p>
+              <p className="text-gray-300 mb-6 text-sm">{errorMsg}</p>
               <button 
                 onClick={handleReset}
-                className="px-6 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded transition-colors"
+                className="px-6 py-2 bg-red-500 hover:bg-red-600 text-white font-bold rounded transition-colors uppercase tracking-wide text-sm"
               >
                 Try Again
               </button>
@@ -173,7 +215,12 @@ const App: React.FC = () => {
       <footer className="relative z-10 border-t border-white/5 bg-[#0f1923] py-8">
         <div className="max-w-7xl mx-auto px-6 flex flex-col md:flex-row justify-between items-center text-gray-600 text-sm">
           <p>&copy; 2024 VALOMAP ANALYST. Fan project. Not affiliated with Riot Games.</p>
-          <p className="font-mono text-xs mt-2 md:mt-0">POWERED BY GOOGLE GEMINI 2.5</p>
+          <p className="font-mono text-xs mt-2 md:mt-0 flex items-center gap-2">
+            POWERED BY 
+            <span className={provider === 'gemini' ? 'text-[#ff4655]' : 'text-gray-500'}>GEMINI</span>
+            &
+            <span className={provider === 'openai' ? 'text-[#00e5bf]' : 'text-gray-500'}>OPENAI</span>
+          </p>
         </div>
       </footer>
     </div>
