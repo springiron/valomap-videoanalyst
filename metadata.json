@@ -1,0 +1,5 @@
+{
+  "name": "ValoMap Analyst",
+  "description": "Upload a Valorant screenshot to analyze player positions on the minimap using AI.",
+  "requestFramePermissions": []
+}
