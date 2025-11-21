@@ -1,23 +1,95 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { AnalysisResult } from "../types";
+import { AnalysisResult, PlayerPosition } from "../types";
 
 const genAI = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const analyzeValorantScreenshot = async (base64Image: string): Promise<AnalysisResult> => {
-  const modelId = "gemini-2.5-flash"; // Flash is fast and good enough for spatial reasoning on diagrams
+// Internal types for the raw API response matching the schema below
+interface RawAgentDetection {
+  team: string;
+  agentGuess?: string;
+  boundingBox: {
+    ymin: number;
+    xmin: number;
+    ymax: number;
+    xmax: number;
+  };
+}
 
+interface RawAnalysisResponse {
+  mapName: string;
+  minimapLocation: {
+    ymin: number;
+    xmin: number;
+    ymax: number;
+    xmax: number;
+  };
+  detectedIcons: RawAgentDetection[];
+  summary: string;
+}
+
+export const analyzeValorantScreenshot = async (base64Image: string): Promise<AnalysisResult> => {
+  const modelId = "gemini-2.5-flash";
+
+  // Improved prompt strategy:
+  // 1. Ask for absolute coordinates (0-1000) for everything.
+  // 2. Do not ask the model to calculate relative percentages (it is bad at math).
+  // 3. Use "thinking" to ensure it carefully distinguishes the minimap from the scoreboard.
   const prompt = `
-    Analyze this Valorant gameplay screenshot.
-    
-    1. Locate the Minimap. It is usually in the top-left corner, but sometimes configured to be elsewhere. 
-    2. Identify the map name if visible (e.g., Haven, Bind, Ascent), or guess based on geometry.
-    3. Detect all player icons currently visible *inside the minimap area*.
-    4. For each player, identify their team color (Red vs Green/Blue/Cyan/Yellow) or side (Attacker/Defender) if clear.
-    5. Estimate the relative X and Y coordinates (0-100) of each player *within the minimap bounding box*. (0,0 is top-left of the minimap, 100,100 is bottom-right of the minimap).
-    6. Provide the bounding box of the minimap itself relative to the full image (0-1000 scale).
-    
-    Return the result in JSON.
+    Analyze this Valorant gameplay screenshot with high precision.
+
+    GOAL: accurate extraction of the minimap and player positions on it.
+
+    INSTRUCTIONS:
+    1. **Locate the Minimap**: Find the minimap UI element (usually top-left, sometimes top-right). Return its ABSOLUTE bounding box (0-1000 scale).
+    2. **Detect ALL Agent Icons**: Find every agent/hero icon visible anywhere in the image (minimap, scoreboard, etc.). 
+       - Return the ABSOLUTE bounding box (0-1000 scale) for each.
+       - Identify the team (Red/Enemy or Blue/Cyan/Ally).
+       - Guess the agent name if possible.
+    3. **Context**: Identify the map name and provide a tactical summary.
+
+    OUTPUT: JSON format only.
   `;
+
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      mapName: { type: Type.STRING },
+      minimapLocation: {
+        type: Type.OBJECT,
+        description: "The bounding box of the minimap on the full image (0-1000 scale)",
+        properties: {
+          ymin: { type: Type.INTEGER },
+          xmin: { type: Type.INTEGER },
+          ymax: { type: Type.INTEGER },
+          xmax: { type: Type.INTEGER },
+        },
+        required: ["ymin", "xmin", "ymax", "xmax"]
+      },
+      detectedIcons: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            team: { type: Type.STRING },
+            agentGuess: { type: Type.STRING },
+            boundingBox: {
+              type: Type.OBJECT,
+              properties: {
+                ymin: { type: Type.INTEGER },
+                xmin: { type: Type.INTEGER },
+                ymax: { type: Type.INTEGER },
+                xmax: { type: Type.INTEGER },
+              },
+              required: ["ymin", "xmin", "ymax", "xmax"]
+            }
+          },
+          required: ["team", "boundingBox"]
+        }
+      },
+      summary: { type: Type.STRING }
+    },
+    required: ["mapName", "minimapLocation", "detectedIcons", "summary"]
+  };
 
   try {
     const response = await genAI.models.generateContent({
@@ -30,43 +102,63 @@ export const analyzeValorantScreenshot = async (base64Image: string): Promise<An
       },
       config: {
         responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            mapName: { type: Type.STRING, description: "Name of the map (e.g. Haven, Ascent)" },
-            minimapBounds: {
-              type: Type.OBJECT,
-              description: "The bounding box of the minimap on the full image (0-1000 scale)",
-              properties: {
-                ymin: { type: Type.INTEGER },
-                xmin: { type: Type.INTEGER },
-                ymax: { type: Type.INTEGER },
-                xmax: { type: Type.INTEGER },
-              },
-              required: ["ymin", "xmin", "ymax", "xmax"]
-            },
-            players: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  team: { type: Type.STRING, description: "Team color or name (e.g. Red, Blue)" },
-                  agentGuess: { type: Type.STRING, description: "Best guess of agent name if icon is clear" },
-                  x: { type: Type.NUMBER, description: "X position 0-100 relative to minimap width" },
-                  y: { type: Type.NUMBER, description: "Y position 0-100 relative to minimap height" }
-                },
-                required: ["team", "x", "y"]
-              }
-            },
-            summary: { type: Type.STRING, description: "A brief tactical summary of the positions (e.g. 'Attackers are pushing B long')" }
-          },
-          required: ["mapName", "minimapBounds", "players", "summary"]
-        }
+        responseSchema: responseSchema,
+        // Enable thinking to improve spatial reasoning and object differentiation
+        thinkingConfig: { thinkingBudget: 2048 }, 
+        maxOutputTokens: 8192
       }
     });
 
     if (response.text) {
-      return JSON.parse(response.text) as AnalysisResult;
+      const rawData = JSON.parse(response.text) as RawAnalysisResponse;
+      
+      // --- Post-Processing Logic ---
+      // We calculate relative positions in code to avoid model hallucination/math errors.
+      
+      const mapBox = rawData.minimapLocation;
+      const mapWidth = mapBox.xmax - mapBox.xmin;
+      const mapHeight = mapBox.ymax - mapBox.ymin;
+
+      // Filter icons to only those INSIDE the minimap
+      const players: PlayerPosition[] = rawData.detectedIcons
+        .map(icon => {
+          const iconCenterY = (icon.boundingBox.ymin + icon.boundingBox.ymax) / 2;
+          const iconCenterX = (icon.boundingBox.xmin + icon.boundingBox.xmax) / 2;
+
+          // Define a strict boundary check
+          // Icons must be largely within the minimap box to count
+          const isInside = 
+            iconCenterX >= mapBox.xmin && 
+            iconCenterX <= mapBox.xmax &&
+            iconCenterY >= mapBox.ymin &&
+            iconCenterY <= mapBox.ymax;
+
+          if (!isInside) return null;
+
+          // Calculate relative percentage (0-100) for the UI
+          let relX = ((iconCenterX - mapBox.xmin) / mapWidth) * 100;
+          let relY = ((iconCenterY - mapBox.ymin) / mapHeight) * 100;
+          
+          // Clamp values
+          relX = Math.max(0, Math.min(100, relX));
+          relY = Math.max(0, Math.min(100, relY));
+
+          return {
+            team: icon.team,
+            agentGuess: icon.agentGuess,
+            x: relX,
+            y: relY
+          };
+        })
+        .filter((p): p is PlayerPosition => p !== null);
+
+      return {
+        mapName: rawData.mapName,
+        minimapBounds: mapBox, 
+        players: players,
+        summary: rawData.summary
+      };
+
     } else {
       throw new Error("No text response from Gemini");
     }
