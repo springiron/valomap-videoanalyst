@@ -121,7 +121,7 @@ export const analyzeValorantScreenshot = async (base64Image: string): Promise<An
 
       // Filter icons to only those INSIDE the minimap
       const players: PlayerPosition[] = rawData.detectedIcons
-        .map(icon => {
+        .map((icon): PlayerPosition | null => {
           const iconCenterY = (icon.boundingBox.ymin + icon.boundingBox.ymax) / 2;
           const iconCenterX = (icon.boundingBox.xmin + icon.boundingBox.xmax) / 2;
 
